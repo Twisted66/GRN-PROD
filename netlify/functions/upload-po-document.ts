@@ -1,9 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+import { 
+  createAuthenticatedClient, 
+  extractAuthToken, 
+  authenticateUser, 
+  checkPurchaseOrderAccess,
+  responses 
+} from '../../src/lib/auth-utils';
+import { fileUploadSchema, validateInput } from '../../src/lib/validation-schemas';
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
@@ -11,51 +14,100 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const { file, fileName, poId } = req.body;
-
-    if (!file || !fileName || !poId) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    // Extract and validate auth token
+    const authToken = extractAuthToken(req);
+    if (!authToken) {
+      return res.status(401).json(responses.unauthorized().body);
     }
 
-    // Convert base64 to buffer
-    const buffer = Buffer.from(file, 'base64');
+    // Create authenticated Supabase client
+    const supabase = createAuthenticatedClient(authToken);
     
-    // Upload to Supabase Storage
-    const { data, error } = await supabase.storage
+    // Authenticate user
+    const { success: authSuccess, user, error: authError } = await authenticateUser(supabase);
+    if (!authSuccess || !user) {
+      return res.status(401).json(responses.unauthorized(authError).body);
+    }
+
+    // Validate input data
+    const validation = validateInput(fileUploadSchema, req.body);
+    if (!validation.success) {
+      return res.status(400).json(responses.badRequest('Invalid input data', validation.errors).body);
+    }
+
+    const { file, fileName, poId } = validation.data;
+
+    // SECURITY: Check if user has access to this purchase order
+    const hasAccess = await checkPurchaseOrderAccess(supabase, user.id, poId);
+    if (!hasAccess) {
+      return res.status(403).json(responses.forbidden('You do not have access to this purchase order').body);
+    }
+
+    // Convert base64 to buffer and validate file size
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(file, 'base64');
+      
+      // Check file size (max 10MB)
+      if (buffer.length > 10 * 1024 * 1024) {
+        return res.status(400).json(responses.badRequest('File too large. Maximum size is 10MB').body);
+      }
+    } catch (error) {
+      return res.status(400).json(responses.badRequest('Invalid file encoding').body);
+    }
+    
+    // Use service role for storage operations (but with validated access)
+    const serviceSupabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+    
+    // Upload to Supabase Storage with user-specific path
+    const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '');
+    const filePath = `${poId}/${user.id}/${Date.now()}-${sanitizedFileName}`;
+    
+    const { data: uploadData, error: uploadError } = await serviceSupabase.storage
       .from('purchase-orders')
-      .upload(`${poId}/${fileName}`, buffer, {
+      .upload(filePath, buffer, {
         contentType: 'application/pdf',
-        upsert: true
+        upsert: false // Don't overwrite existing files
       });
 
-    if (error) {
-      console.error('Upload error:', error);
-      return res.status(500).json({ error: 'Upload failed' });
+    if (uploadError) {
+      console.error('Upload error:', uploadError);
+      return res.status(500).json(responses.serverError('Upload failed').body);
     }
 
     // Get public URL
-    const { data: urlData } = supabase.storage
+    const { data: urlData } = serviceSupabase.storage
       .from('purchase-orders')
-      .getPublicUrl(data.path);
+      .getPublicUrl(uploadData.path);
 
-    // Update PO with document URL
+    // Update PO with document URL (using authenticated client to respect RLS)
     const { error: updateError } = await supabase
       .from('purchase_orders')
-      .update({ document_url: urlData.publicUrl })
+      .update({ 
+        document_url: urlData.publicUrl,
+        updated_at: new Date().toISOString()
+      })
       .eq('id', poId);
 
     if (updateError) {
-      return res.status(500).json({ error: 'Failed to update PO' });
+      console.error('Update error:', updateError);
+      // Clean up uploaded file on failure
+      await serviceSupabase.storage.from('purchase-orders').remove([uploadData.path]);
+      return res.status(500).json(responses.serverError('Failed to update purchase order').body);
     }
 
-    res.status(200).json({ 
+    return res.status(200).json(responses.success({
       success: true, 
       message: 'File uploaded successfully',
-      url: urlData.publicUrl
-    });
+      url: urlData.publicUrl,
+      filename: sanitizedFileName
+    }).body);
 
   } catch (error) {
     console.error('Error uploading file:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json(responses.serverError().body);
   }
 }

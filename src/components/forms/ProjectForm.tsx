@@ -9,14 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-
-const projectSchema = z.object({
-  name: z.string().min(1, 'Project name is required'),
-  description: z.string().optional(),
-  status: z.enum(['active', 'completed', 'cancelled']),
-  start_date: z.string().optional(),
-  end_date: z.string().optional(),
-})
+import { projectSchema, sanitizeString } from '@/lib/validation-schemas'
 
 type ProjectFormData = z.infer<typeof projectSchema>
 

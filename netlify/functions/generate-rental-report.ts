@@ -1,10 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 import puppeteer from 'puppeteer-core';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+import { 
+  createAuthenticatedClient, 
+  extractAuthToken, 
+  authenticateUser, 
+  checkProjectAccess,
+  responses 
+} from '../../src/lib/auth-utils';
+import { reportGenerationSchema, validateInput } from '../../src/lib/validation-schemas';
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
@@ -12,17 +15,54 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const { projectId, startDate, endDate } = req.body;
+    // Extract and validate auth token
+    const authToken = extractAuthToken(req);
+    if (!authToken) {
+      return res.status(401).json(responses.unauthorized().body);
+    }
 
-    // Complex query to get rental data with calculations
+    // Create authenticated Supabase client
+    const supabase = createAuthenticatedClient(authToken);
+    
+    // Authenticate user
+    const { success: authSuccess, user, error: authError } = await authenticateUser(supabase);
+    if (!authSuccess || !user) {
+      return res.status(401).json(responses.unauthorized(authError).body);
+    }
+
+    // Validate input data
+    const validation = validateInput(reportGenerationSchema, req.body);
+    if (!validation.success) {
+      return res.status(400).json(responses.badRequest('Invalid input data', validation.errors).body);
+    }
+
+    const { projectId, startDate, endDate } = validation.data;
+
+    // SECURITY: Check if user has access to this project
+    const hasAccess = await checkProjectAccess(supabase, user.id, projectId);
+    if (!hasAccess) {
+      return res.status(403).json(responses.forbidden('You do not have access to this project').body);
+    }
+
+    // Get project info first
+    const { data: project, error: projectError } = await supabase
+      .from('projects')
+      .select('name')
+      .eq('id', projectId)
+      .single();
+
+    if (projectError || !project) {
+      return res.status(404).json(responses.notFound('Project not found').body);
+    }
+
+    // Complex query to get rental data with calculations (using authenticated client respects RLS)
     const { data: rentalData, error } = await supabase
       .from('dn_items')
       .select(`
         *,
-        delivery_notes!inner(delivery_date),
+        delivery_notes!inner(delivery_date, purchase_order_id),
         po_items!inner(item_name, unit_price),
         po_items.purchase_orders!inner(po_number, project_id),
-        po_items.purchase_orders.projects!inner(name),
         po_items.purchase_orders.vendors!inner(name)
       `)
       .eq('po_items.purchase_orders.project_id', projectId)
@@ -30,7 +70,12 @@ export default async function handler(req: any, res: any) {
       .lte('delivery_notes.delivery_date', endDate);
 
     if (error) {
-      return res.status(500).json({ error: 'Failed to fetch data' });
+      console.error('Data fetch error:', error);
+      return res.status(500).json(responses.serverError('Failed to fetch rental data').body);
+    }
+
+    if (!rentalData || rentalData.length === 0) {
+      return res.status(404).json(responses.notFound('No rental data found for the specified period').body);
     }
 
     // Calculate rental days and amounts
@@ -76,7 +121,9 @@ export default async function handler(req: any, res: any) {
       <body>
         <div class="header">
           <h1>Equipment Rental Report</h1>
+          <h2>Project: ${project.name}</h2>
           <p>Period: ${startDate} to ${endDate}</p>
+          <p>Generated: ${new Date().toLocaleDateString()}</p>
         </div>
         
         <div class="summary">
@@ -121,29 +168,56 @@ export default async function handler(req: any, res: any) {
       </html>
     `;
 
-    // Generate PDF using Puppeteer
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-    
-    const page = await browser.newPage();
-    await page.setContent(htmlTemplate);
-    
-    const pdf = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: { top: '20px', bottom: '20px', left: '20px', right: '20px' }
-    });
-    
-    await browser.close();
+    // Generate PDF using Puppeteer with better error handling
+    let browser;
+    try {
+      browser = await puppeteer.launch({
+        headless: true,
+        args: [
+          '--no-sandbox', 
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu'
+        ]
+      });
+      
+      const page = await browser.newPage();
+      
+      // Set viewport and wait for content to load
+      await page.setViewport({ width: 1200, height: 800 });
+      await page.setContent(htmlTemplate, { waitUntil: 'networkidle0' });
+      
+      const pdf = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '20px', bottom: '20px', left: '20px', right: '20px' },
+        displayHeaderFooter: true,
+        footerTemplate: `<div style="font-size: 10px; margin: 0 auto;">Generated on ${new Date().toLocaleDateString()} | Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>`
+      });
+      
+      await browser.close();
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename=rental-report.pdf');
-    res.send(pdf);
+      const filename = `rental-report-${project.name.replace(/[^a-zA-Z0-9]/g, '-')}-${startDate}-${endDate}.pdf`;
+      
+      return res.status(200).json({
+        ...responses.pdf(pdf, filename),
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Content-Length': pdf.length.toString()
+        }
+      });
+
+    } catch (pdfError) {
+      console.error('PDF generation error:', pdfError);
+      if (browser) {
+        await browser.close();
+      }
+      return res.status(500).json(responses.serverError('PDF generation failed').body);
+    }
 
   } catch (error) {
     console.error('Error generating report:', error);
-    res.status(500).json({ error: 'Report generation failed' });
+    return res.status(500).json(responses.serverError('Report generation failed').body);
   }
 }
