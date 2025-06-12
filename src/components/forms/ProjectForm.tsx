@@ -1,6 +1,5 @@
 'use client'
 
-import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -9,13 +8,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { projectSchema, sanitizeString } from '@/lib/validation-schemas'
+import { projectSchema } from '@/lib/validation-schemas'
 
 type ProjectFormData = z.infer<typeof projectSchema>
 
 interface ProjectFormProps {
   onSubmit: (data: ProjectFormData) => Promise<void>
-  initialData?: Partial<ProjectFormData>
+  initialData?: Partial<ProjectFormData> | undefined
   isLoading?: boolean
 }
 
@@ -26,7 +25,7 @@ export function ProjectForm({ onSubmit, initialData, isLoading }: ProjectFormPro
     formState: { errors, isSubmitting },
   } = useForm<ProjectFormData>({
     resolver: zodResolver(projectSchema),
-    defaultValues: initialData,
+    defaultValues: initialData || {},
   })
 
   return (

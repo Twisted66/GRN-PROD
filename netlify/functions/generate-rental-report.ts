@@ -1,5 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
-import puppeteer from 'puppeteer-core';
+import puppeteer, { Browser } from 'puppeteer-core';
 import { 
   createAuthenticatedClient, 
   extractAuthToken, 
@@ -27,7 +26,7 @@ export default async function handler(req: any, res: any) {
     // Authenticate user
     const { success: authSuccess, user, error: authError } = await authenticateUser(supabase);
     if (!authSuccess || !user) {
-      return res.status(401).json(responses.unauthorized(authError).body);
+      return res.status(401).json(responses.unauthorized(authError || undefined).body);
     }
 
     // Validate input data
@@ -79,7 +78,7 @@ export default async function handler(req: any, res: any) {
     }
 
     // Calculate rental days and amounts
-    const processedData = rentalData.map(item => {
+    const processedData = rentalData.map((item: any) => {
       const deliveryDate = new Date(item.delivery_notes.delivery_date);
       const returnDate = item.returned_at ? new Date(item.returned_at) : new Date();
       const totalDays = Math.ceil((returnDate.getTime() - deliveryDate.getTime()) / (1000 * 60 * 60 * 24));
@@ -148,7 +147,7 @@ export default async function handler(req: any, res: any) {
             </tr>
           </thead>
           <tbody>
-            ${processedData.map(item => `
+            ${processedData.map((item: any) => `
               <tr>
                 <td>${item.po_items.purchase_orders.po_number}</td>
                 <td>${item.po_items.item_name}</td>
@@ -169,7 +168,7 @@ export default async function handler(req: any, res: any) {
     `;
 
     // Generate PDF using Puppeteer with better error handling
-    let browser;
+    let browser: Browser | undefined;
     try {
       browser = await puppeteer.launch({
         headless: true,
@@ -193,20 +192,17 @@ export default async function handler(req: any, res: any) {
         margin: { top: '20px', bottom: '20px', left: '20px', right: '20px' },
         displayHeaderFooter: true,
         footerTemplate: `<div style="font-size: 10px; margin: 0 auto;">Generated on ${new Date().toLocaleDateString()} | Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>`
-      });
+      }) as Buffer;
       
       await browser.close();
 
       const filename = `rental-report-${project.name.replace(/[^a-zA-Z0-9]/g, '-')}-${startDate}-${endDate}.pdf`;
       
-      return res.status(200).json({
-        ...responses.pdf(pdf, filename),
-        headers: {
-          'Content-Type': 'application/pdf',
-          'Content-Disposition': `attachment; filename="${filename}"`,
-          'Content-Length': pdf.length.toString()
-        }
-      });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', pdf.length.toString());
+      
+      return res.status(200).json(responses.pdf(pdf, filename));
 
     } catch (pdfError) {
       console.error('PDF generation error:', pdfError);

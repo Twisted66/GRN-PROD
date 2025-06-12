@@ -133,7 +133,7 @@ export default function ProjectsDataTable() {
             <DialogContent className="max-w-2xl">
               <ProjectForm
                 onSubmit={selectedProject ? handleUpdateProject : handleCreateProject}
-                initialData={selectedProject || undefined}
+                initialData={selectedProject ?? undefined}
               />
             </DialogContent>
           </Dialog>

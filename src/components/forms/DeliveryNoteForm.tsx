@@ -51,9 +51,7 @@ export default function DeliveryNoteForm() {
 
   const {
     register,
-    control,
     handleSubmit,
-    watch,
     setValue,
     formState: { errors, isSubmitting },
   } = useForm<DeliveryNoteFormData>({
@@ -63,7 +61,6 @@ export default function DeliveryNoteForm() {
     },
   })
 
-  const watchedItems = watch('items')
 
   useEffect(() => {
     fetchPurchaseOrders()
@@ -87,7 +84,7 @@ export default function DeliveryNoteForm() {
       .in('status', ['confirmed', 'sent'])
       .order('po_number')
     
-    setPurchaseOrders(data || [])
+    setPurchaseOrders((data as any) || [])
   }
 
   const fetchPoItems = async (poId: string) => {

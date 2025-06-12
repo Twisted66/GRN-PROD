@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "supabase-database": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase",
+        "--access-token",
+        "sbp_54e8e1e08b20680e6f275f17a3912a512a4962db"
+      ]
+    },
+    "netlify-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@netlify/mcp"
+      ],
+      "env": {
+        "NETLIFY_PERSONAL_ACCESS_TOKEN": "nfp_CKfjiZZu1Pe5P3MExsGVPfU8DEy1xr4W423c"
+      }
+    }
+  }
+}

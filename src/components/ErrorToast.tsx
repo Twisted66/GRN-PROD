@@ -19,6 +19,7 @@ function Toast({ id, message, category, onDismiss, duration = 5000 }: ToastProps
       const timer = setTimeout(onDismiss, duration);
       return () => clearTimeout(timer);
     }
+    return undefined;
   }, [duration, onDismiss]);
 
   const getToastStyles = () => {

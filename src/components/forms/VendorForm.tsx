@@ -22,7 +22,7 @@ type VendorFormData = z.infer<typeof vendorSchema>
 
 interface VendorFormProps {
   onSubmit: (data: VendorFormData) => Promise<void>
-  initialData?: Partial<VendorFormData>
+  initialData?: Partial<VendorFormData> | undefined
   isLoading?: boolean
 }
 

@@ -27,7 +27,7 @@ export default async function handler(req: any, res: any) {
     // Authenticate user
     const { success: authSuccess, user, error: authError } = await authenticateUser(supabase);
     if (!authSuccess || !user) {
-      return res.status(401).json(responses.unauthorized(authError).body);
+      return res.status(401).json(responses.unauthorized(authError || undefined).body);
     }
 
     // Check if user has manager/admin role (only they can process returns)
